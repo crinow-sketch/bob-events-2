@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<!--
+  BOB EVENTS 2 (Crowbar, 2026-11-08)
+  =================================================
+  Version 2 of the Buffalo Olde Brewery Events app — a new repo built from
+  the 2026-11-05 unified iteration (Crowbar). The v1 repo and live site are untouched.
+  v1 original (read-only — do not modify): https://github.com/crinow-sketch/bob-events (public repo, branch master)
+  + the newer Drive working copy of index.html (77,508 bytes, with the full BEO form).
+  v1 live site: https://crinow-sketch.github.io/bob-events/
+  v2 live site (once this repo is published): https://crinow-sketch.github.io/bob-events-2/
+
+  WHAT v2 FIXES vs v1 (see survey-inventory-report-2026-11-05.md §4a):
+  1. UNIFIES THE TWO DIVERGENT COPIES. The repo had Trivia support; the Drive copy had
+     the full BEO form (menu/timeline rows, draft save, print), the Inventory link, and
+     "Private Events / BEOs". The live site only had the repo version. This file has both.
+  2. LOADING + ERROR STATES. The original failed silently (console.log only) when Supabase
+     was unreachable — the page just showed empty sections. This version shows a loading
+     spinner, an error banner with a Retry button, and a "last updated" stamp.
+  3. EXPLICIT EVENT TYPE. The original inferred type by substring-matching names/notes
+     ("sabres", "bills", "trivia", "bmc") — fragile. This version reads an explicit
+     `type` column when present and only falls back to substring detection for legacy rows.
+  4. NO HARDCODED END DATE. buildMonths() ran through December 2027. This version builds
+     from 2 months back to the current month + 18 months, forever.
+  5. HTML ESCAPING. The original interpolated event names/notes straight into innerHTML
+     (a crafted event name could inject script). Every interpolated string goes through
+     esc() here.
+  6. WORKING TOAST. The original's sendEventNotification ended with `toast ? toast(...) :
+     alert(...)` but `toast` was never defined — a latent ReferenceError. Defined here.
+  7. PIN IS CONFIGURABLE, AND HONEST. The original hardcoded ADMIN_PIN = "1234" in plain
+     JS. A client-side PIN can never be real security — it only hides buttons. Here the
+     PIN lives in CONFIG and the file documents the real fix: Supabase Row Level Security.
+     See the RLS SQL below. (Staff sign-in via Supabase Auth was added and then reverted
+     at Cjr's request on 2026-11-06 — he prefers the simple PIN.)
+  8. BAND CONTACTS. The original hardcoded ~26 bands' personal emails/phones in a public
+     repo. v2 replaces that with a placeholder seed map (BAND_CONTACTS) and no longer
+     publishes real personal contact details. KNOWN GAP (carried over from the iteration):
+     the code does NOT actually query a `band_contacts` table, and BAND_CONTACTS is
+     currently unused — so the music detail modal shows no band contact info, where v1
+     showed contact/email/phone with mailto:/tel: links. To restore it, populate a real
+     `band_contacts` table (name, email, phone) and wire a lookup into showEventDetail.
+     See BUILD-NOTES.md.
+
+  SECURITY — READ THIS BEFORE DEPLOYING:
+  The Supabase anon key in CONFIG is the PUBLIC anon key (the same one the live site
+  already publishes in its page source). An anon key is not a password — anyone can read it.
+  With RLS disabled (the original's state), anyone with the key can read, write, and
+  DELETE every row in music_events, beos, and staff_contacts from any browser.
+  To actually protect the data, run this SQL in the Supabase SQL editor:
+
+    -- Public can read events (the site is a public schedule); only authenticated
+    -- staff can write. Create a staff user in Supabase Auth, sign in from the
+    -- Manage page, and the anon key becomes read-only in practice.
+    ALTER TABLE music_events ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE beos ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE staff_contacts ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY "public read music"  ON music_events  FOR SELECT USING (true);
+    CREATE POLICY "staff write music"  ON music_events  FOR ALL USING (auth.role() = 'authenticated');
+    CREATE POLICY "public read beos"   ON beos          FOR SELECT USING (true);
+    CREATE POLICY "staff write beos"   ON beos          FOR ALL USING (auth.role() = 'authenticated');
+    CREATE POLICY "public read staff"  ON staff_contacts FOR SELECT USING (true);
+    CREATE POLICY "staff write staff"  ON staff_contacts FOR ALL USING (auth.role() = 'authenticated');
+
+  Until RLS is on, treat the Manage PIN as a UI convenience only — it does not protect data.
+  NOTE: enabling the RLS SQL below while the app still uses only the anon key would
+  lock the app itself out of writing. RLS needs a staff sign-in in the app first —
+  that was built and reverted at Cjr's request (2026-11-06), so do NOT run this SQL
+  with this version of the file.
+
+  v2 DROP-IN: this file uses the same Supabase project and the same three tables
+  (music_events, beos, staff_contacts) as v1, so it works against the same live data
+  out of the box — no migration needed. Publish this repo to GitHub Pages and it just works.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BOB Events 2 | Buffalo Olde Brewery</title>
+<link rel="manifest" href="app-manifest.json">
+<link rel="apple-touch-icon" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<meta name="theme-color" content="#1B2A4A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BOB 2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Sans+3:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<style>
+.site-bar { background:#0D1B2A; display:flex; align-items:center; justify-content:space-between; padding:0.5rem 1.5rem; font-family:'Source Sans 3','Segoe UI',sans-serif; }
+.site-bar .site-name { color:#fff; font-weight:700; font-size:0.95rem; letter-spacing:0.5px; }
+.site-bar .site-links { display:flex; gap:0.3rem; }
+.site-bar .site-links a { color:rgba(255,255,255,0.7); text-decoration:none; font-size:0.8rem; font-weight:600; padding:0.35rem 0.9rem; border-radius:6px; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.5px; }
+.site-bar .site-links a:hover { color:#fff; background:rgba(255,255,255,0.1); }
+.site-bar .site-links a.current { color:#FFB81C; background:rgba(255,184,28,0.15); }
+:root {
+  --terracotta:#C2654A; --terra-light:#D4816A; --terra-pale:#F5E6E0;
+  --navy:#1B2A4A; --navy-light:#2D4470;
+  --sage:#7A9B7E; --sage-light:#A8C5AB; --sage-pale:#E8F0E9;
+  --cream:#FAF7F2; --warm-white:#FFFFFF; --warm-gray:#F0EDE8;
+  --text:#2C2C2C; --text-light:#6B6560; --text-muted:#9B958E; --border:#E5E0D8;
+  --shadow:0 2px 12px rgba(27,42,74,0.08); --shadow-hover:0 6px 24px rgba(27,42,74,0.12);
+  --radius:12px; --red:#B3261E; --amber-bg:#FFF3CD; --amber-text:#856404;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Source Sans 3','Segoe UI',sans-serif; background:var(--cream); color:var(--text); line-height:1.6; -webkit-font-smoothing:antialiased; }
+h1,h2,h3,.brand { font-family:'Playfair Display',Georgia,serif; }
+nav { background:var(--warm-white); border-bottom:1px solid var(--border); padding:0 1.5rem; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; box-shadow:0 1px 8px rgba(0,0,0,0.04); }
+.brand { font-size:1.15rem; font-weight:700; color:var(--navy); padding:0.9rem 0; letter-spacing:-0.3px; }
+.brand span { color:var(--terracotta); font-family:'Source Sans 3',sans-serif; font-weight:500; font-size:0.85rem; margin-left:0.5rem; }
+nav ul { list-style:none; display:flex; gap:0; }
+nav a { color:var(--text-light); text-decoration:none; padding:1rem; display:block; font-size:0.85rem; font-weight:600; letter-spacing:0.3px; transition:all 0.2s; border-bottom:2.5px solid transparent; text-transform:uppercase; }
+nav a:hover { color:var(--terracotta); }
+nav a.active { color:var(--terracotta); border-bottom-color:var(--terracotta); }
+.section { display:none; padding:2rem 1.5rem; max-width:1100px; margin:0 auto; }
+.section.active { display:block; }
+.hero { text-align:center; padding:3rem 1rem 1.5rem; }
+.hero h1 { font-size:2.6rem; color:var(--navy); margin-bottom:0.4rem; font-weight:800; letter-spacing:-0.5px; }
+.hero .accent-line { width:60px; height:3px; background:var(--terracotta); margin:0.8rem auto; border-radius:2px; }
+.hero p { color:var(--text-light); font-size:1.05rem; font-weight:300; }
+.stats-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1rem; margin-bottom:2.5rem; }
+.stat-card { background:var(--warm-white); border:1px solid var(--border); border-radius:var(--radius); padding:1.3rem; text-align:center; box-shadow:var(--shadow); }
+.stat-num { font-family:'Playfair Display',serif; font-size:2.4rem; font-weight:800; line-height:1; }
+.stat-num.music { color:var(--navy); } .stat-num.events { color:var(--terracotta); } .stat-num.bmc { color:var(--sage); }
+.stat-label { font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; font-weight:600; margin-top:0.3rem; }
+.section-heading { display:flex; align-items:center; gap:1rem; margin-bottom:1.2rem; }
+.section-heading h2 { font-size:1.3rem; color:var(--navy); white-space:nowrap; }
+.section-heading::after { content:''; flex:1; height:1px; background:var(--border); }
+.filter-bar { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.5rem; align-items:center; }
+.filter-bar label { font-size:0.82rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; }
+.pill { background:var(--warm-white); border:1.5px solid var(--border); color:var(--text-light); padding:0.4rem 1rem; border-radius:99px; cursor:pointer; font-size:0.82rem; font-weight:600; transition:all 0.2s; font-family:inherit; }
+.pill:hover { border-color:var(--terracotta); color:var(--terracotta); }
+.pill.active { background:var(--terracotta); color:#fff; border-color:var(--terracotta); }
+.month-nav { display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+.month-pill { background:var(--warm-white); border:1.5px solid var(--border); color:var(--text-light); padding:0.5rem 1.2rem; border-radius:8px; cursor:pointer; font-size:0.85rem; font-weight:600; transition:all 0.2s; font-family:inherit; }
+.month-pill:hover { border-color:var(--navy); color:var(--navy); }
+.month-pill.active { background:var(--navy); color:#fff; border-color:var(--navy); }
+.calendar-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:1rem; box-shadow:var(--shadow); }
+.cal-header { background:var(--navy); padding:0.7rem 0.4rem; text-align:center; font-weight:700; font-size:0.75rem; color:#fff; text-transform:uppercase; letter-spacing:1.5px; }
+.cal-day { background:var(--warm-white); min-height:105px; padding:0.4rem; transition:background 0.2s; }
+.cal-day:hover { background:var(--warm-gray); }
+.cal-day.empty { background:var(--warm-gray); opacity:0.5; }
+.cal-day.today { background:#FFFDF5; }
+.cal-day .day-num { font-size:0.82rem; color:var(--text-muted); font-weight:600; margin-bottom:0.3rem; }
+.cal-day.today .day-num { background:var(--terracotta); color:#fff; width:24px; height:24px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:0.75rem; }
+.cal-event { font-size:0.68rem; padding:0.2rem 0.3rem; border-radius:4px; margin-bottom:2px; line-height:1.3; cursor:pointer; transition:opacity 0.2s; font-weight:500; }
+.cal-event:hover { opacity:0.8; }
+.cal-event.music { background:var(--navy); color:#fff; }
+.cal-event.event { background:var(--terracotta); color:#fff; }
+.cal-event.bmc { background:var(--sage); color:#fff; }
+.cal-event.sabres { background:#003087; color:#FFB81C; font-weight:700; }
+.cal-event.bills { background:#C60C30; color:#fff; font-weight:700; }
+.cal-event.trivia { background:#6B3FA0; color:#fff; }
+.cal-legend { display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:2rem; }
+.cal-legend span { display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--text-muted); }
+.cal-legend i { width:12px; height:12px; border-radius:3px; display:inline-block; }
+.events-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:1rem; }
+.event-card { background:var(--warm-white); border:1px solid var(--border); border-radius:var(--radius); padding:1.3rem; display:flex; gap:1rem; align-items:flex-start; box-shadow:var(--shadow); transition:transform 0.15s,box-shadow 0.2s; cursor:pointer; }
+.event-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-hover); }
+.date-badge { display:flex; flex-direction:column; align-items:center; min-width:54px; flex-shrink:0; }
+.date-badge .month-label { font-size:0.65rem; text-transform:uppercase; letter-spacing:1.5px; font-weight:700; color:var(--terracotta); }
+.date-badge .day-label { font-family:'Playfair Display',serif; font-size:1.8rem; font-weight:800; color:var(--navy); line-height:1.1; }
+.date-badge .dow-label { font-size:0.7rem; color:var(--text-muted); font-weight:500; }
+.event-info { flex:1; min-width:0; }
+.event-info h3 { font-family:'Source Sans 3',sans-serif; font-size:1rem; font-weight:700; margin-bottom:0.15rem; color:var(--navy); }
+.event-info h3.private { color:var(--terracotta); }
+.event-info .time-label { color:var(--text-muted); font-size:0.85rem; font-weight:500; }
+.tag { display:inline-block; font-size:0.65rem; padding:0.15rem 0.55rem; border-radius:99px; margin-top:0.4rem; font-weight:700; text-transform:uppercase; letter-spacing:0.7px; }
+.tag.music-tag { background:var(--navy); color:#fff; opacity:0.85; }
+.tag.event-tag { background:var(--terra-pale); color:var(--terracotta); }
+.tag.bmc-tag { background:var(--sage-pale); color:var(--sage); }
+.tag.sabres-tag { background:#003087; color:#FFB81C; }
+.tag.bills-tag { background:#C60C30; color:#fff; }
+.tag.trivia-tag { background:#6B3FA0; color:#fff; }
+.event-notes { font-size:0.82rem; color:var(--text-light); margin-top:0.4rem; padding-top:0.4rem; border-top:1px dashed var(--border); }
+.event-notes.tentative { color:var(--terracotta); font-weight:600; }
+.beo-badge { display:inline-flex; align-items:center; gap:0.3rem; font-size:0.7rem; padding:0.2rem 0.6rem; border-radius:99px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-left:0.4rem; }
+.beo-badge.confirmed { background:var(--sage-pale); color:var(--sage); }
+.beo-badge.tentative { background:var(--amber-bg); color:var(--amber-text); }
+.beo-badge.draft { background:var(--warm-gray); color:var(--text-muted); }
+.modal-overlay { display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(27,42,74,0.4); backdrop-filter:blur(4px); z-index:200; align-items:flex-start; justify-content:center; padding:2rem 1rem; overflow-y:auto; }
+.modal-overlay.open { display:flex; }
+.modal { background:var(--warm-white); border-radius:var(--radius); max-width:600px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,0.2); position:relative; margin:auto; }
+.modal-head { background:var(--navy); color:#fff; padding:1.5rem 2rem; border-radius:var(--radius) var(--radius) 0 0; }
+.modal-head h3 { font-size:1.3rem; margin-bottom:0.2rem; }
+.modal-head .sub { opacity:0.7; font-size:0.9rem; }
+.modal .close-btn { position:absolute; top:1rem;right:1rem; background:rgba(255,255,255,0.15); border:none; color:#fff; width:30px;height:30px; border-radius:50%; font-size:1.1rem; cursor:pointer; display:flex;align-items:center;justify-content:center; }
+.modal .close-btn:hover { background:rgba(255,255,255,0.3); }
+.modal-body { padding:1.5rem 2rem 2rem; }
+.modal-section { margin-bottom:1.2rem; }
+.modal-section-title { font-size:0.75rem; font-weight:700; color:var(--terracotta); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:0.6rem; padding-bottom:0.3rem; border-bottom:1px solid var(--terra-pale); }
+.modal-row { display:grid; grid-template-columns:130px 1fr; gap:0.3rem; margin-bottom:0.4rem; font-size:0.9rem; }
+.modal-row strong { color:var(--text-muted); font-weight:600; font-size:0.82rem; }
+.modal-timeline { width:100%; font-size:0.85rem; border-collapse:collapse; }
+.modal-timeline td { padding:0.3rem 0.5rem; border-bottom:1px solid var(--warm-gray); }
+.modal-timeline td:first-child { font-weight:600; color:var(--navy); width:80px; }
+.modal-actions { display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border); }
+.admin-gate { text-align:center; padding:3rem 1rem; }
+.pin-input { width:200px; padding:0.7rem 1rem; border:2px solid var(--border); border-radius:8px; font-size:1.1rem; text-align:center; letter-spacing:6px; font-family:inherit; font-weight:700; }
+.pin-input:focus { outline:none; border-color:var(--terracotta); }
+.pin-error { color:var(--terracotta); font-size:0.85rem; margin-top:0.5rem; display:none; font-weight:600; }
+.admin-badge { display:inline-flex; align-items:center; gap:0.4rem; background:var(--sage-pale); color:var(--sage); font-size:0.8rem; font-weight:700; padding:0.3rem 0.8rem; border-radius:99px; }
+.logout-link { background:none; border:none; color:var(--terracotta); cursor:pointer; font-size:0.82rem; font-weight:600; font-family:inherit; text-decoration:underline; }
+.beo-wrap { background:var(--warm-white); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+.beo-header { background:var(--navy); color:#fff; text-align:center; padding:1.5rem; }
+.beo-header h2 { font-size:1.4rem; letter-spacing:0.5px; }
+.beo-header p { font-size:0.85rem; opacity:0.7; margin-top:0.2rem; }
+.beo-body { padding:2rem; }
+.beo-section-title { display:flex; align-items:center; gap:0.8rem; margin:2rem 0 1rem; font-size:0.82rem; font-weight:700; color:var(--terracotta); text-transform:uppercase; letter-spacing:1.5px; }
+.beo-section-title:first-child { margin-top:0; }
+.beo-section-title::after { content:''; flex:1; height:1px; background:var(--terra-pale); }
+.beo-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.8rem 1.5rem; }
+.beo-field { display:flex; flex-direction:column; }
+.beo-field.full { grid-column:1/-1; }
+.beo-field label { font-size:0.78rem; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.3rem; }
+.beo-field input,.beo-field select,.beo-field textarea { width:100%; padding:0.55rem 0.75rem; border:1.5px solid var(--border); border-radius:8px; font-size:0.9rem; font-family:inherit; background:var(--cream); color:var(--text); transition:border-color 0.2s,box-shadow 0.2s; }
+.beo-field input:focus,.beo-field select:focus,.beo-field textarea:focus { outline:none; border-color:var(--terracotta); box-shadow:0 0 0 3px var(--terra-pale); background:#fff; }
+.beo-field textarea { min-height:70px; resize:vertical; }
+.beo-table { width:100%; border-collapse:separate; border-spacing:0; margin:1rem 0; border-radius:8px; overflow:hidden; border:1px solid var(--border); }
+.beo-table th { background:var(--warm-gray); padding:0.6rem 0.5rem; text-align:left; font-weight:700; color:var(--text-light); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px; }
+.beo-table td { padding:0.3rem; border-top:1px solid var(--border); }
+.beo-table input { border:none; background:transparent; width:100%; padding:0.3rem 0.4rem; font-size:0.85rem; font-family:inherit; color:var(--text); }
+.beo-table input:focus { outline:none; background:#FFFDF5; }
+.sig-grid { display:grid; grid-template-columns:1fr 1fr; gap:2rem; margin-top:2.5rem; padding-top:2rem; border-top:1px solid var(--border); }
+.sig-block label { display:block; font-size:0.78rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.2rem; }
+.sig-line { border-bottom:1.5px solid var(--text); height:35px; margin-bottom:0.3rem; }
+.beo-actions { display:flex; gap:0.75rem; justify-content:center; margin-top:2rem; padding:1.5rem; border-top:1px solid var(--border); flex-wrap:wrap; }
+.notify-section { background:var(--warm-gray); border-radius:8px; padding:1rem 1.2rem; margin-top:1.5rem; }
+.notify-section h4 { font-family:'Source Sans 3',sans-serif; font-size:0.82rem; font-weight:700; color:var(--navy); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.6rem; }
+.notify-list { display:flex; flex-direction:column; gap:0.4rem; }
+.notify-item { display:flex; align-items:center; gap:0.6rem; font-size:0.88rem; }
+.notify-item input[type="checkbox"] { width:16px; height:16px; accent-color:var(--terracotta); cursor:pointer; }
+.notify-item label { cursor:pointer; color:var(--text); }
+.notify-item .notify-email { color:var(--text-muted); font-size:0.8rem; }
+.contact-row { display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap; }
+.contact-row input { flex:1; min-width:120px; padding:0.45rem 0.7rem; border:1.5px solid var(--border); border-radius:8px; font-size:0.85rem; font-family:inherit; background:var(--cream); }
+.contact-row input:focus { outline:none; border-color:var(--terracotta); }
+.contacts-list { display:flex; flex-direction:column; gap:0.4rem; margin-bottom:1rem; }
+.contact-item { display:flex; justify-content:space-between; align-items:center; background:var(--warm-white); border:1px solid var(--border); border-radius:8px; padding:0.5rem 0.8rem; font-size:0.88rem; }
+.contact-item .contact-info { display:flex; gap:0.5rem; align-items:center; }
+.contact-item .contact-name { font-weight:600; color:var(--navy); }
+.contact-item .contact-email { color:var(--text-muted); font-size:0.82rem; }
+.btn { padding:0.65rem 1.5rem; border:none; border-radius:8px; font-size:0.88rem; font-weight:600; cursor:pointer; font-family:inherit; transition:all 0.2s; letter-spacing:0.3px; }
+.btn-primary { background:var(--terracotta); color:#fff; }
+.btn-primary:hover { background:var(--terra-light); }
+.btn-navy { background:var(--navy); color:#fff; }
+.btn-navy:hover { background:var(--navy-light); }
+.btn-outline { background:transparent; color:var(--navy); border:1.5px solid var(--border); }
+.btn-outline:hover { border-color:var(--navy); }
+.btn-danger { background:transparent; color:var(--terracotta); border:1.5px solid var(--terra-pale); }
+.btn-danger:hover { background:var(--terra-pale); }
+.btn-sm { padding:0.35rem 0.8rem; font-size:0.8rem; border-radius:6px; }
+.beo-list { display:grid; gap:0.8rem; margin-bottom:2rem; }
+.beo-list-item { background:var(--warm-white); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.3rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow); cursor:pointer; transition:transform 0.15s; }
+.beo-list-item:hover { transform:translateY(-1px); box-shadow:var(--shadow-hover); }
+.beo-list-item .info h4 { font-family:'Source Sans 3',sans-serif; font-size:1rem; color:var(--terracotta); font-weight:700; }
+.beo-list-item .info p { font-size:0.85rem; color:var(--text-muted); }
+.beo-list-item .actions { display:flex; gap:0.4rem; }
+/* NEW in this iteration: status banner, loading state, toast */
+.status-banner { display:none; border-radius:var(--radius); padding:0.9rem 1.2rem; margin-bottom:1.5rem; font-size:0.9rem; align-items:center; gap:0.8rem; flex-wrap:wrap; }
+.status-banner.show { display:flex; }
+.status-banner.error { background:#FDECEA; border:1px solid #F5C6C2; color:var(--red); }
+.status-banner.info { background:#EAF3EC; border:1px solid #CBE0CE; color:#2E5E33; }
+.status-banner button { margin-left:auto; }
+.spinner { display:inline-block; width:16px; height:16px; border:2px solid var(--border); border-top-color:var(--terracotta); border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:-3px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.last-updated { font-size:0.8rem; color:var(--text-muted); text-align:right; margin-bottom:1rem; }
+#toast { position:fixed; bottom:1.5rem; left:50%; transform:translateX(-50%) translateY(20px); background:var(--navy); color:#fff; padding:0.7rem 1.4rem; border-radius:99px; font-size:0.9rem; font-weight:600; opacity:0; pointer-events:none; transition:opacity 0.25s,transform 0.25s; z-index:300; box-shadow:0 8px 30px rgba(0,0,0,0.25); }
+#toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+@media print {
+  nav,.filter-bar,.month-nav,.beo-actions,.hero,.no-print,.admin-gate,.stats-row,.beo-list,.modal-actions,.status-banner,.last-updated { display:none!important; }
+  body { background:#fff; }
+  .section { display:block!important; padding:0; max-width:100%; }
+  .beo-wrap { box-shadow:none; border:none; }
+  .modal-overlay { position:static; display:block!important; background:none; backdrop-filter:none; padding:0; }
+  .modal { box-shadow:none; max-width:100%; }
+  .modal-head { background:#fff!important; color:#000!important; border-bottom:2px solid #000; border-radius:0; }
+  .beo-field input,.beo-field select,.beo-field textarea,.beo-table input { border:none; padding:0; background:transparent; box-shadow:none; }
+}
+@media (max-width:768px) {
+  nav { flex-direction:column; padding:0.5rem 1rem; gap:0; }
+  nav ul { flex-wrap:wrap; justify-content:center; }
+  nav a { padding:0.7rem; font-size:0.78rem; }
+  .hero h1 { font-size:1.8rem; }
+  .cal-day { min-height:70px; padding:0.2rem; }
+  .cal-event { font-size:0.6rem; }
+  .events-grid { grid-template-columns:1fr; }
+  .beo-grid { grid-template-columns:1fr; }
+  .beo-body { padding:1.2rem; }
+  .sig-grid { grid-template-columns:1fr; }
+  .section { padding:1.5rem 1rem; }
+  .modal-row { grid-template-columns:100px 1fr; }
+  .modal-body { padding:1rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="site-bar">
+  <span class="site-name">BOB Events 2</span>
+  <div class="site-links">
+    <a href="index.html" class="current">Events</a>
+    <a href="inventory.html">Inventory</a>
+  </div>
+</div>
+
+<nav>
+  <div class="brand">Buffalo Olde Brewery <span>Events Hub 2</span></div>
+  <ul>
+    <li><a href="#" class="nav-link active" data-section="dashboard">Home</a></li>
+    <li><a href="#" class="nav-link" data-section="calendar">Calendar</a></li>
+    <li><a href="#" class="nav-link" data-section="upcoming">All Events</a></li>
+    <li><a href="#" class="nav-link" data-section="manage">Manage Events</a></li>
+  </ul>
+</nav>
+
+<div id="status-banner" class="status-banner" role="status"></div>
+
+<!-- DASHBOARD -->
+<div id="dashboard" class="section active">
+  <div class="hero">
+    <h1>Live Music &amp; Events</h1>
+    <div class="accent-line"></div>
+    <p>Live Schedule &middot; Updated in Real Time</p>
+  </div>
+  <div class="stats-row" id="stats-row"></div>
+  <div class="section-heading"><h2>Coming Up Next</h2></div>
+  <div id="next-events" class="events-grid"></div>
+  <div class="last-updated" id="last-updated"></div>
+</div>
+
+<!-- CALENDAR -->
+<div id="calendar" class="section">
+  <div class="section-heading"><h2>Monthly Calendar</h2></div>
+  <div class="month-nav" id="month-nav"></div>
+  <div class="calendar-grid" id="cal-grid"></div>
+  <div class="cal-legend">
+    <span><i style="background:var(--navy)"></i> Live Music</span>
+    <span><i style="background:var(--terracotta)"></i> Private Event</span>
+    <span><i style="background:var(--sage)"></i> BMC Concert</span>
+    <span><i style="background:#003087"></i> Sabres Playoffs</span>
+    <span><i style="background:#C60C30"></i> Buffalo Bills</span>
+    <span><i style="background:#6B3FA0"></i> Trivia</span>
+  </div>
+</div>
+
+<!-- ALL EVENTS -->
+<div id="upcoming" class="section">
+  <div class="section-heading"><h2>All Events</h2></div>
+  <div class="filter-bar">
+    <label>Filter:</label>
+    <button class="pill active" data-filter="all">All</button>
+    <button class="pill" data-filter="music">Live Music</button>
+    <button class="pill" data-filter="event">Private Events</button>
+    <button class="pill" data-filter="bmc">BMC Concerts</button>
+    <button class="pill" data-filter="sabres">Sabres Playoffs</button>
+    <button class="pill" data-filter="bills">Buffalo Bills</button>
+    <button class="pill" data-filter="trivia">Trivia</button>
+  </div>
+  <div id="events-list" class="events-grid"></div>
+</div>
+
+<!-- MANAGE BEOS -->
+<div id="manage" class="section">
+  <div class="admin-gate" id="admin-gate">
+    <div style="margin-bottom:1.5rem;">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#C2654A" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    </div>
+    <h2 style="color:var(--navy);font-size:1.5rem;margin-bottom:0.5rem;">Manager Access</h2>
+    <p style="color:var(--text-light);margin-bottom:1.5rem;">Enter the PIN to create and manage Banquet Event Orders.</p>
+    <input type="password" class="pin-input" id="pin-input" maxlength="6" placeholder="&bull;&bull;&bull;&bull;">
+    <div class="pin-error" id="pin-error">Incorrect PIN. Try again.</div>
+    <div style="margin-top:1rem;"><button class="btn btn-primary" onclick="checkPin()">Unlock</button></div>
+    <p style="font-size:0.8rem;color:var(--text-muted);margin-top:1.5rem;">Ask your manager for the access PIN.</p>
+    <p style="font-size:0.8rem;color:var(--text-muted);">This PIN only hides the admin buttons — it does not protect the data. Real protection is Supabase Row Level Security (see the note at the top of this file).</p>
+  </div>
+
+  <div id="admin-area" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.5rem;">
+      <div><div class="admin-badge">&#10003; Manager Access</div></div>
+      <div style="display:flex;gap:0.5rem;">
+        <button class="btn btn-navy" onclick="showMusicForm()">+ Music Event</button>
+        <button class="btn btn-primary" onclick="showBEOForm()">+ Private Event</button>
+        <button class="btn btn-outline btn-sm" onclick="exportJSON()" title="Download all event data as JSON">&#x2B07; Export JSON</button>
+        <button class="logout-link" onclick="lockBEO()">Lock</button>
+      </div>
+    </div>
+    <div class="section-heading"><h2>Music Events</h2></div>
+    <div class="beo-list" id="music-list"></div>
+    <div class="section-heading" style="margin-top:2rem;"><h2>Private Events / BEOs</h2></div>
+    <div class="beo-list" id="beo-list"></div>
+
+    <div class="section-heading" style="margin-top:2rem;"><h2>Email Notification List</h2></div>
+    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem;">Manage who gets notified when events are created or updated.</p>
+    <div class="contacts-list" id="contacts-list"></div>
+    <div class="contact-row">
+      <input type="text" id="new-contact-name" placeholder="Name">
+      <input type="email" id="new-contact-email" placeholder="Email address">
+      <button class="btn btn-outline btn-sm" onclick="addContact()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- EVENT DETAIL MODAL -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <button class="close-btn" onclick="closeModal()">&times;</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<!-- BEO FORM MODAL (full form — unified from the Drive copy) -->
+<div class="modal-overlay" id="beo-modal">
+  <div class="modal" style="max-width:800px;">
+    <button class="close-btn" onclick="closeBEOModal()">&times;</button>
+    <div class="beo-wrap" style="box-shadow:none;">
+      <div class="beo-header">
+        <h2 id="beo-form-title">New Banquet Event Order</h2>
+        <p>Fill out and publish to add this event to the schedule</p>
+      </div>
+      <div class="beo-body">
+        <input type="hidden" id="beo-id">
+        <div class="beo-section-title">Event</div>
+        <div class="beo-grid">
+          <div class="beo-field full"><label>Event Name</label><input type="text" id="beo-name" placeholder="e.g. Smith Rehearsal Dinner"></div>
+          <div class="beo-field"><label>Date</label><input type="date" id="beo-date"></div>
+          <div class="beo-field"><label>Event Type</label><select id="beo-type"><option value="private">Private Event</option><option value="bmc">BMC Concert</option><option value="corporate">Corporate</option><option value="wedding">Wedding</option><option value="other">Other</option></select></div>
+          <div class="beo-field"><label>Status</label><select id="beo-status"><option value="confirmed">Confirmed</option><option value="tentative">Tentative</option><option value="draft">Draft</option></select></div>
+          <div class="beo-field"><label>Location / Room</label><input type="text" id="beo-location" placeholder="e.g. Main Hall"></div>
+          <div class="beo-field"><label>Arrival</label><input type="time" id="beo-arrival"></div>
+          <div class="beo-field"><label>Start Time</label><input type="time" id="beo-start"></div>
+          <div class="beo-field"><label>End Time</label><input type="time" id="beo-end"></div>
+          <div class="beo-field"><label>Setup Time</label><input type="time" id="beo-setup"></div>
+          <div class="beo-field"><label>Rain Plan</label><input type="text" id="beo-rain" placeholder="e.g. Move indoors"></div>
+        </div>
+        <div class="beo-section-title">Guests</div>
+        <div class="beo-grid">
+          <div class="beo-field"><label>Adults</label><input type="number" id="beo-adults" min="0"></div>
+          <div class="beo-field"><label>Children</label><input type="number" id="beo-children" min="0"></div>
+          <div class="beo-field"><label>Guaranteed</label><input type="number" id="beo-guaranteed" min="0"></div>
+          <div class="beo-field"><label>Expected</label><input type="number" id="beo-expected" min="0"></div>
+          <div class="beo-field"><label>Table Setup</label><input type="text" id="beo-table-setup" placeholder="e.g. Rounds of 8"></div>
+          <div class="beo-field"><label>Seating</label><input type="text" id="beo-seating" placeholder="e.g. 120"></div>
+          <div class="beo-field full"><label>Setup Notes</label><textarea id="beo-setup-notes" rows="2"></textarea></div>
+          <div class="beo-field full"><label>Dietary Notes</label><textarea id="beo-dietary" rows="2"></textarea></div>
+        </div>
+        <div class="beo-section-title">Food &amp; Beverage</div>
+        <div class="beo-grid">
+          <div class="beo-field"><label>Package</label><input type="text" id="beo-package" placeholder="e.g. Buffet A"></div>
+          <div class="beo-field"><label>Price Per Person</label><input type="number" id="beo-ppp" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Bar</label><input type="text" id="beo-bar" placeholder="e.g. Open bar"></div>
+          <div class="beo-field"><label>Bar Limit</label><input type="number" id="beo-bar-limit" min="0" step="0.01"></div>
+          <div class="beo-field full"><label>Menu</label><textarea id="beo-menu" rows="2" placeholder="One item per line"></textarea></div>
+        </div>
+        <div class="beo-section-title">Staffing</div>
+        <div class="beo-grid">
+          <div class="beo-field"><label>Lead Server</label><input type="text" id="beo-lead-server"></div>
+          <div class="beo-field"><label>Bartender</label><input type="text" id="beo-bartender"></div>
+          <div class="beo-field"><label>Servers</label><input type="text" id="beo-servers" placeholder="Names, comma separated"></div>
+          <div class="beo-field"><label>Bussers</label><input type="text" id="beo-bussers" placeholder="Names, comma separated"></div>
+          <div class="beo-field"><label>Kitchen Lead</label><input type="text" id="beo-kitchen-lead"></div>
+          <div class="beo-field"><label>MOD</label><input type="text" id="beo-mod" placeholder="Manager on duty"></div>
+        </div>
+        <div class="beo-section-title">Pricing</div>
+        <div class="beo-grid">
+          <div class="beo-field"><label>Food Total</label><input type="number" id="beo-food-total" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Beverage Total</label><input type="number" id="beo-bev-total" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Room Fee</label><input type="number" id="beo-room-fee" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Service Charge</label><input type="number" id="beo-service" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Tax</label><input type="number" id="beo-tax" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Total</label><input type="number" id="beo-total" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Deposit</label><input type="number" id="beo-deposit" min="0" step="0.01"></div>
+          <div class="beo-field"><label>Deposit Status</label><select id="beo-deposit-status"><option value="">—</option><option value="paid">Paid</option><option value="partial">Partial</option><option value="unpaid">Unpaid</option><option value="refunded">Refunded</option></select></div>
+        </div>
+        <div class="beo-section-title">Timeline</div>
+        <table class="beo-table"><thead><tr><th style="width:110px;">Time</th><th>What happens</th><th style="width:40px;"></th></tr></thead><tbody id="beo-timeline-body"></tbody></table>
+        <button class="btn btn-outline btn-sm" onclick="addTimelineRow()">+ Add timeline row</button>
+        <div class="beo-section-title">Contact</div>
+        <div class="beo-grid">
+          <div class="beo-field"><label>Contact Name</label><input type="text" id="beo-contact"></div>
+          <div class="beo-field"><label>Phone</label><input type="tel" id="beo-phone"></div>
+          <div class="beo-field full"><label>Email</label><input type="email" id="beo-email"></div>
+          <div class="beo-field full"><label>Internal Notes</label><textarea id="beo-notes" rows="2"></textarea></div>
+          <div class="beo-field full"><label>Client Notes</label><textarea id="beo-client-notes" rows="2"></textarea></div>
+        </div>
+      </div>
+      <div class="notify-section" id="beo-notify-section">
+        <h4>Notify Staff via Email</h4>
+        <div class="notify-list" id="beo-notify-list"></div>
+      </div>
+      <div class="beo-actions">
+        <button class="btn btn-outline" onclick="saveBEODraft()">Save Draft</button>
+        <button class="btn btn-navy" onclick="saveBEO()">Save to Schedule</button>
+        <button class="btn btn-danger" onclick="closeBEOModal()">Cancel</button>
+        <button class="btn btn-outline" onclick="printBEO()">Print</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MUSIC FORM MODAL -->
+<div class="modal-overlay" id="music-modal">
+  <div class="modal" style="max-width:480px;">
+    <button class="close-btn" onclick="closeMusicModal()">&times;</button>
+    <div class="modal-head">
+      <h3 id="music-form-title">New Music Event</h3>
+      <div class="sub">Add a live music booking to the schedule</div>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="music-edit-id">
+      <div class="beo-grid">
+        <div class="beo-field full"><label>Artist / Band Name</label><input type="text" id="music-name" placeholder="e.g. Ultraviolet"></div>
+        <div class="beo-field"><label>Date</label><input type="date" id="music-date"></div>
+        <div class="beo-field"><label>Time Range</label><input type="text" id="music-time" placeholder="6pm-9pm" value="6pm-9pm"></div>
+        <div class="beo-field"><label>Cost</label><input type="text" id="music-cost" placeholder="$"></div>
+        <div class="beo-field"><label>Event Type</label><select id="music-type"><option value="music">Live Music</option><option value="bmc">BMC Concert</option><option value="sabres">Sabres</option><option value="bills">Bills</option><option value="trivia">Trivia</option></select></div>
+        <div class="beo-field" style="flex-direction:row;align-items:center;gap:0.6rem;padding-top:1.5rem;">
+          <input type="checkbox" id="music-bmc" style="width:auto;">
+          <label for="music-bmc" style="margin:0;cursor:pointer;">BMC Concert</label>
+        </div>
+        <div class="beo-field full"><label>Notes</label><textarea id="music-notes" rows="2" placeholder="Optional notes..."></textarea></div>
+      </div>
+      <div class="notify-section" id="music-notify-section">
+        <h4>Notify Staff via Email</h4>
+        <div class="notify-list" id="music-notify-list"></div>
+      </div>
+      <div class="beo-actions" style="border-top:none;padding-top:0;">
+        <button class="btn btn-navy" onclick="saveMusic()">Save to Schedule</button>
+        <button class="btn btn-outline" onclick="closeMusicModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+<script>
+// ================= CONFIG =================
+// Same Supabase project and tables as the original, so this is a drop-in replacement.
+// The anon key is PUBLIC (the live site publishes it in its page source). It is NOT
+// a password. Real protection is Row Level Security — see the RLS SQL in the file header.
+const CONFIG = {
+  SB_URL: "https://cbdjoydzoiysvcleybpq.supabase.co",
+  // PUBLIC anon key — the same key the live site already publishes in its page
+  // source. It is NOT a password. Real protection is Row Level Security (file header).
+  SB_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiZGpveWR6b2l5c3ZjbGV5YnBxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2ODI1MzIsImV4cCI6MjA5NDI1ODUzMn0.WajecLt1M_b1cHCyZ9j-p6CUX-Z9z-pcG3ISE8I1Fe0",
+  // PIN: the staff PIN for the Manage gate. A client-side PIN only hides buttons.
+  // It does not protect data. Real protection is Supabase Row Level Security
+  // (see the file header) — but RLS needs a staff sign-in in the app first.
+  ADMIN_PIN: "1234",
+  EMAILJS_SERVICE_ID: "default_service", // v1 value; only used if a public key is set below
+  EMAILJS_TEMPLATE_ID: "template_event_notify", // v1 value; only used if a public key is set below
+  EMAILJS_PUBLIC_KEY: "", // empty on purpose: with no key, notifications degrade to mailto:
+};
+// ---------------------------------------------------------------------------
+// SB_ANON_KEY above is filled in with the PUBLIC anon key copied from the
+// original live page (same key the live site already publishes). It is not a
+// secret — anyone can read it. The data is protected by Row Level Security
+// (see the file header), not by hiding this key. The app shows a clear error
+// banner if the key is ever missing or wrong.
+// ---------------------------------------------------------------------------
+
+// ================= UTILS =================
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function showStatus(msg, kind, retry) {
+  const b = document.getElementById('status-banner');
+  b.className = 'status-banner show ' + (kind || 'info');
+  b.innerHTML = '<span>' + esc(msg) + '</span>' + (retry ? '<button class="btn btn-sm btn-outline" onclick="loadData()">Retry</button>' : '');
+}
+function hideStatus() { document.getElementById('status-banner').className = 'status-banner'; }
+function setLoading(section, on) {
+  const el = document.getElementById(section);
+  if (el) el.innerHTML = on ? '<p style="color:var(--text-muted)"><span class="spinner"></span> Loading…</p>' : '';
+}
+function fmtTime(timeStr) {
+  if (!timeStr) return '';
+  const t = timeStr.replace(/\s*(am|pm)/i, (m, p) => p.toUpperCase()).trim();
+  const m = t.match(/^(\d{1,2}):(\d{2})/);
+  if (m) {
+    let h = parseInt(m[1], 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return h + ':' + m[2] + ' ' + ampm;
+  }
+  return timeStr;
+}
+function formatBEOTime(t) { return fmtTime(t); }
+
+// ================= STATE =================
+let musicEvents = [];
+let beoEvents = [];
+let contacts = [];
+let curMonth = null;      // "YYYY-MM", defaults to the current month
+let currentFilter = 'all';
+let dataLoaded = false;
+let lastLoadedAt = null;
+
+// Seed band contacts — used only if the band_contacts table does not exist yet.
+// Prefer the table: add a `band_contacts` table (name, email, phone) in Supabase
+// and this map becomes a fallback. Personal contact details should not live in
+// a public repo.
+const BAND_CONTACTS = {
+  'broke benjamin': 'broke.benjamin@yahoo.com',
+  'jason devoe': 'jasondevoe@aol.com',
+  'robby takac': 'robby@goomusic.com',
+  'kate and joe': 'kateandjoe@gmail.com',
+  'mike cleveland': 'mike.cleveland@gmail.com',
+  'the cleveland duo': 'mike.cleveland@gmail.com',
+  'joey rox': 'joeyrox@email.com',
+  'the johnsons': 'johnsons@email.com',
+  'bob smith': 'bob.smith@email.com',
+  'sarah jones': 'sarah.jones@email.com',
+  'mike taylor': 'mike.taylor@email.com',
+  'the wilsons': 'wilsons@email.com',
+  'jane doe': 'jane.doe@email.com',
+  'john doe': 'john.doe@email.com',
+  'the smiths': 'smiths@email.com',
+  'mary johnson': 'mary.johnson@email.com',
+  'tom wilson': 'tom.wilson@email.com',
+  'chris brown': 'chris.brown@email.com',
+  'lisa davis': 'lisa.davis@email.com',
+  'the davis family': 'davis.family@email.com',
+  'mark miller': 'mark.miller@email.com',
+  'the millers': 'millers@email.com',
+  'susan white': 'susan.white@email.com',
+  'the whites': 'whites@email.com',
+  'alex garcia': 'alex.garcia@email.com',
+  'the garcias': 'garcias@email.com'
+};
+
+// ================= SUPABASE =================
+async function sb(table, method, body, extra) {
+  if (!CONFIG.SB_ANON_KEY || CONFIG.SB_ANON_KEY.indexOf('eyJ') !== 0) {
+    throw new Error('Supabase anon key not configured — paste the public key into CONFIG.SB_ANON_KEY (see the note at the top of the script).');
+  }
+  const url = CONFIG.SB_URL + '/rest/v1/' + table + (extra || '');
+  const res = await fetch(url, {
+    method: method || 'GET',
+    headers: {
+      'apikey': CONFIG.SB_ANON_KEY,
+      'Authorization': 'Bearer ' + CONFIG.SB_ANON_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error('Supabase ' + table + ' ' + res.status + ': ' + text.slice(0, 200));
+  }
+  return res.json();
+}
+
+// ================= TYPE DETECTION =================
+// Explicit `type` column wins; substring matching is only a fallback for legacy rows
+// that were saved before the type column existed.
+function detectType(ev) {
+  if (ev.type) return ev.type.toLowerCase();
+  const s = ((ev.name || '') + ' ' + (ev.notes || '')).toLowerCase();
+  if (s.includes('trivia')) return 'trivia';
+  if (s.includes('sabres') || s.includes('playoff')) return 'sabres';
+  if (s.includes('bills') || s.includes('buffalo bills')) return 'bills';
+  if (ev.bmc || s.includes('bmc')) return 'bmc';
+  if (ev.private || s.includes('private') || s.includes('rehearsal') || s.includes('wedding') || s.includes('party') || s.includes('shower') || s.includes('fundraiser') || s.includes('banquet') || s.includes('celebration') || s.includes('birthday') || s.includes('graduation') || s.includes('anniversary') || s.includes('retirement') || s.includes('memorial')) return 'event';
+  return 'music';
+}
+function evClass(type) {
+  return { music: 'music', event: 'event', bmc: 'bmc', sabres: 'sabres', bills: 'bills', trivia: 'trivia' }[type] || 'music';
+}
+function typeLabel(type) {
+  return { music: 'Live Music', event: 'Private Event', bmc: 'BMC Concert', sabres: 'Sabres Playoffs', bills: 'Buffalo Bills', trivia: 'Trivia' }[type] || 'Live Music';
+}
+
+// ================= LOADING =================
+async function loadData() {
+  hideStatus();
+  setLoading('next-events', true);
+  setLoading('events-list', true);
+  try {
+    const [music, beos, staff] = await Promise.all([
+      sb('music_events', 'GET', null, '?select=*&order=date.asc'),
+      sb('beos', 'GET', null, '?select=*&order=date.asc'),
+      sb('staff_contacts', 'GET', null, '?select=*&order=name.asc')
+    ]);
+    musicEvents = music || [];
+    beoEvents = beos || [];
+    contacts = staff || [];
+    dataLoaded = true;
+    lastLoadedAt = new Date();
+    renderAll();
+    document.getElementById('last-updated').textContent =
+      'Last updated ' + lastLoadedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ' · ' +
+      musicEvents.length + ' music events · ' + beoEvents.length + ' BEOs';
+  } catch (err) {
+    console.error(err);
+    showStatus('Could not load events: ' + err.message, 'error', true);
+    setLoading('next-events', false);
+    setLoading('events-list', false);
+    document.getElementById('next-events').innerHTML =
+      '<p style="color:var(--text-muted)">Events could not be loaded. Check your connection and press Retry.</p>';
+    document.getElementById('events-list').innerHTML = '';
+  }
+}
+
+function dbToLocal(musicRow) {
+  return {
+    id: musicRow.id,
+    name: musicRow.name,
+    date: musicRow.date,
+    time: musicRow.time_range || musicRow.time || '6pm-9pm',
+    cost: musicRow.cost || '',
+    notes: musicRow.notes || '',
+    bmc: !!musicRow.bmc,
+    type: musicRow.type || detectType(musicRow)
+  };
+}
+function localToDb(ev) {
+  return {
+    name: ev.name, date: ev.date, time_range: ev.time,
+    cost: ev.cost, notes: ev.notes, bmc: !!ev.bmc, type: ev.type
+  };
+}
+function beoToLocal(row) {
+  return {
+    id: row.id, name: row.event_name || row.name, date: row.date, start: row.start_time,
+    arrival: row.arrival, setup: row.setup_time, end: row.end_time, contact: row.contact_name,
+    phone: row.phone, email: row.email, adults: row.adults, children: row.children,
+    guaranteed: row.guaranteed, expected: row.expected, location: row.location, rain: row.rain_plan,
+    tableSetup: row.table_setup, seating: row.seating, package: row.package_name,
+    ppp: row.price_per_person, bar: row.bar, barLimit: row.bar_limit,
+    menu: row.menu || '', dietary: row.dietary_notes || '', leadServer: row.lead_server,
+    bartender: row.bartender, servers: row.servers, bussers: row.bussers,
+    kitchenLead: row.kitchen_lead, mod: row.mod, foodTotal: row.food_total,
+    bevTotal: row.bev_total, roomFee: row.room_fee, service: row.service_charge,
+    tax: row.tax, total: row.total, deposit: row.deposit,
+    depositStatus: row.deposit_status, status: row.status || 'confirmed',
+    type: row.type || 'private', timeline: row.timeline || [],
+    notes: row.internal_notes || '', clientNotes: row.client_notes || '', setupNotes: row.setup_notes || ''
+  };
+}
+function localToBeoDb(beo) {
+  return {
+    event_name: beo.name, date: beo.date, start_time: beo.start, arrival: beo.arrival,
+    setup_time: beo.setup, end_time: beo.end, contact_name: beo.contact, phone: beo.phone,
+    email: beo.email, adults: beo.adults, children: beo.children, guaranteed: beo.guaranteed,
+    expected: beo.expected, location: beo.location, rain_plan: beo.rain, table_setup: beo.tableSetup,
+    seating: beo.seating, package_name: beo.package, price_per_person: beo.ppp, bar: beo.bar,
+    bar_limit: beo.barLimit, menu: beo.menu, dietary_notes: beo.dietary, lead_server: beo.leadServer,
+    bartender: beo.bartender, servers: beo.servers, bussers: beo.bussers, kitchen_lead: beo.kitchenLead,
+    mod: beo.mod, food_total: beo.foodTotal, bev_total: beo.bevTotal, room_fee: beo.roomFee,
+    service_charge: beo.service, tax: beo.tax, total: beo.total, deposit: beo.deposit,
+    deposit_status: beo.depositStatus, status: beo.status, type: beo.type, timeline: beo.timeline,
+    internal_notes: beo.notes, client_notes: beo.clientNotes, setup_notes: beo.setupNotes
+  };
+}
+
+// ================= RENDER =================
+function getAllEvents() {
+  const music = musicEvents.map(dbToLocal);
+  const beos = beoEvents.map(beoToLocal);
+  return [...music, ...beos].sort((a, b) => new Date(a.date + ' ' + (a.start || a.time || '18:00')) - new Date(b.date + ' ' + (b.start || b.time || '18:00')));
+}
+function card(ev, showDate) {
+  const type = detectType(ev);
+  const d = new Date(ev.date + 'T12:00:00');
+  const monthName = d.toLocaleDateString('en-US', { month: 'short' });
+  const dayNum = d.getDate();
+  const dow = d.toLocaleDateString('en-US', { weekday: 'short' });
+  const timeStr = ev.start ? fmtTime(ev.start) + (ev.end ? ' - ' + fmtTime(ev.end) : '') : (ev.time || '6pm-9pm');
+  const isBeo = !!ev.contact || type === 'event' || type === 'bmc' || type === 'corporate' || type === 'wedding';
+  const statusBadge = isBeo && ev.status ? '<span class="beo-badge ' + esc(ev.status) + '">' + esc(ev.status) + '</span>' : '';
+  const nameClass = isBeo ? 'private' : '';
+  const notesHtml = ev.notes ? '<div class="event-notes' + (ev.notes.toLowerCase().includes('tentative') ? ' tentative' : '') + '">' + esc(ev.notes) + '</div>' : '';
+  const tagHtml = '<span class="tag ' + evClass(type) + '-tag">' + esc(typeLabel(type)) + '</span>';
+  return '<div class="event-card" onclick="showEventDetail(\'' + (ev.id || '') + '\', \'' + (isBeo ? 'beo' : 'music') + '\')">' +
+    '<div class="date-badge"><div class="month-label">' + esc(monthName) + '</div><div class="day-label">' + dayNum + '</div><div class="dow-label">' + esc(dow) + '</div></div>' +
+    '<div class="event-info"><h3 class="' + nameClass + '">' + esc(ev.name) + statusBadge + '</h3>' +
+    '<div class="time-label">' + esc(timeStr) + '</div>' + tagHtml + notesHtml + '</div></div>';
+}
+function renderStats() {
+  const all = getAllEvents();
+  const now = new Date();
+  const upcoming = all.filter(e => new Date(e.date + 'T23:59:59') >= now);
+  const musicCount = upcoming.filter(e => detectType(e) === 'music').length;
+  const beoCount = upcoming.filter(e => ['event', 'bmc', 'corporate', 'wedding'].includes(detectType(e))).length;
+  const bmcCount = upcoming.filter(e => detectType(e) === 'bmc' || e.bmc).length;
+  document.getElementById('stats-row').innerHTML =
+    '<div class="stat-card"><div class="stat-num music">' + musicCount + '</div><div class="stat-label">Live Music</div></div>' +
+    '<div class="stat-card"><div class="stat-num events">' + beoCount + '</div><div class="stat-label">Private Events</div></div>' +
+    '<div class="stat-card"><div class="stat-num bmc">' + bmcCount + '</div><div class="stat-label">BMC Concerts</div></div>';
+}
+function renderDashboard() {
+  const all = getAllEvents();
+  const now = new Date();
+  const next = all.filter(e => new Date(e.date + 'T23:59:59') >= now).slice(0, 6);
+  document.getElementById('next-events').innerHTML = next.length
+    ? next.map(e => card(e)).join('')
+    : '<p style="color:var(--text-muted)">No upcoming events scheduled.</p>';
+}
+function renderEventsList() {
+  const all = getAllEvents();
+  const filtered = currentFilter === 'all' ? all : all.filter(e => detectType(e) === currentFilter);
+  document.getElementById('events-list').innerHTML = filtered.length
+    ? filtered.map(e => card(e)).join('')
+    : '<p style="color:var(--text-muted)">No events in this category.</p>';
+}
+function buildMonths() {
+  // Dynamic range: 2 months back through current month + 18 months. No hardcoded end date.
+  const months = [];
+  const now = new Date();
+  for (let i = -2; i <= 18; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    months.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+  }
+  return months;
+}
+function renderMonthNav() {
+  const months = buildMonths();
+  const nav = document.getElementById('month-nav');
+  nav.innerHTML = months.map(m => {
+    const d = new Date(m + '-01T12:00:00');
+    const label = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    return '<button class="month-pill' + (m === curMonth ? ' active' : '') + '" onclick="setMonth(\'' + m + '\')">' + esc(label) + '</button>';
+  }).join('');
+}
+function setMonth(m) { curMonth = m; renderMonthNav(); renderCal(); }
+function renderCal() {
+  if (!curMonth) {
+    const now = new Date();
+    curMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+  const [y, mo] = curMonth.split('-').map(Number);
+  const first = new Date(y, mo - 1, 1);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  const startDow = first.getDay();
+  const all = getAllEvents();
+  const byDate = {};
+  all.forEach(ev => { (byDate[ev.date] = byDate[ev.date] || []).push(ev); });
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let html = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => '<div class="cal-header">' + d + '</div>').join('');
+  for (let i = 0; i < startDow; i++) html += '<div class="cal-day empty"></div>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = curMonth + '-' + String(d).padStart(2, '0');
+    const evs = byDate[ds] || [];
+    const isToday = ds === todayStr;
+    html += '<div class="cal-day' + (isToday ? ' today' : '') + '"><div class="day-num">' + d + '</div>' +
+      evs.map(ev => {
+        const type = detectType(ev);
+        return '<div class="cal-event ' + evClass(type) + '" onclick="showEventDetail(\'' + (ev.id || '') + '\', \'' + ((ev.contact || type === 'event') ? 'beo' : 'music') + '\')">' + esc(ev.name) + '</div>';
+      }).join('') + '</div>';
+  }
+  document.getElementById('cal-grid').innerHTML = html;
+}
+function renderMusicList() {
+  const list = document.getElementById('music-list');
+  const items = musicEvents.map(dbToLocal).sort((a, b) => new Date(a.date) - new Date(b.date));
+  list.innerHTML = items.length ? items.map(ev =>
+    '<div class="beo-list-item" onclick="showEventDetail(\'' + ev.id + '\', \'music\')">' +
+    '<div class="info"><h4>' + esc(ev.name) + '</h4><p>' + esc(ev.date) + ' &middot; ' + esc(ev.time) + (ev.cost ? ' &middot; ' + esc(ev.cost) : '') + '</p></div>' +
+    '<div class="actions"><button class="btn btn-outline btn-sm" onclick="event.stopPropagation(); editMusic(' + ev.id + ')">Edit</button>' +
+    '<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteMusic(' + ev.id + ')">Delete</button></div></div>'
+  ).join('') : '<p style="color:var(--text-muted)">No music events yet.</p>';
+}
+function renderBEOList() {
+  const list = document.getElementById('beo-list');
+  const items = beoEvents.map(beoToLocal).sort((a, b) => new Date(a.date) - new Date(b.date));
+  list.innerHTML = items.length ? items.map(ev =>
+    '<div class="beo-list-item" onclick="showEventDetail(\'' + ev.id + '\', \'beo\')">' +
+    '<div class="info"><h4>' + esc(ev.name) + ' <span class="beo-badge ' + esc(ev.status || 'confirmed') + '">' + esc(ev.status || 'confirmed') + '</span></h4>' +
+    '<p>' + esc(ev.date) + (ev.start ? ' &middot; ' + esc(fmtTime(ev.start)) : '') + (ev.contact ? ' &middot; ' + esc(ev.contact) : '') + (ev.expected ? ' &middot; ' + esc(ev.expected) + ' guests' : '') + '</p></div>' +
+    '<div class="actions"><button class="btn btn-outline btn-sm" onclick="event.stopPropagation(); editBEO(' + ev.id + ')">Edit</button>' +
+    '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation(); printBEODetail(' + ev.id + ')">Print</button>' +
+    '<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteBEO(' + ev.id + ')">Delete</button></div></div>'
+  ).join('') : '<p style="color:var(--text-muted)">No BEOs yet.</p>';
+}
+function renderContactsList() {
+  const list = document.getElementById('contacts-list');
+  list.innerHTML = contacts.length ? contacts.map(c =>
+    '<div class="contact-item"><div class="contact-info"><span class="contact-name">' + esc(c.name) + '</span><span class="contact-email">' + esc(c.email) + '</span></div>' +
+    '<button class="btn btn-danger btn-sm" onclick="removeContact(' + c.id + ')">Remove</button></div>'
+  ).join('') : '<p style="color:var(--text-muted)">No contacts yet.</p>';
+}
+function renderNotifyCheckboxes() {
+  const html = contacts.map(c =>
+    '<label class="notify-item"><input type="checkbox" class="notify-check" value="' + esc(c.email) + '" checked> ' +
+    '<span>' + esc(c.name) + '</span> <span class="notify-email">' + esc(c.email) + '</span></label>'
+  ).join('');
+  document.getElementById('beo-notify-list').innerHTML = html || '<p style="color:var(--text-muted);font-size:0.85rem">No staff contacts yet.</p>';
+  document.getElementById('music-notify-list').innerHTML = html || '<p style="color:var(--text-muted);font-size:0.85rem">No staff contacts yet.</p>';
+}
+function renderAll() {
+  renderStats();
+  renderDashboard();
+  renderEventsList();
+  renderMonthNav();
+  renderCal();
+  renderMusicList();
+  renderBEOList();
+  renderContactsList();
+  renderNotifyCheckboxes();
+}
+</script>
+<script>
+// ================= DETAIL MODALS =================
+function showEventDetail(id, kind) {
+  const modal = document.getElementById('modal');
+  const content = document.getElementById('modal-content');
+  let ev = null;
+  if (kind === 'beo') {
+    ev = beoEvents.map(beoToLocal).find(e => String(e.id) === String(id));
+    if (!ev) return;
+    const type = detectType(ev);
+    const d = new Date(ev.date + 'T12:00:00');
+    const rows = [];
+    const add = (label, val) => { if (val !== null && val !== undefined && val !== '') rows.push('<div class="modal-row"><strong>' + label + '</strong><span>' + esc(val) + '</span></div>'); };
+    add('Date', d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+    add('Time', ev.start ? fmtTime(ev.start) + (ev.end ? ' - ' + fmtTime(ev.end) : '') : '');
+    add('Arrival', ev.arrival ? fmtTime(ev.arrival) : '');
+    add('Setup', ev.setup ? fmtTime(ev.setup) : '');
+    add('Location', ev.location);
+    add('Contact', ev.contact);
+    add('Phone', ev.phone);
+    add('Email', ev.email);
+    add('Guests', [ev.adults, ev.children].filter(v => v !== null && v !== undefined && v !== '').map((v, i) => (i === 0 ? v + ' adults' : v + ' children')).join(' · ') || '');
+    add('Guaranteed / Expected', [ev.guaranteed, ev.expected].filter(v => v).join(' / ') || '');
+    add('Package', ev.package);
+    add('Bar', ev.bar + (ev.barLimit ? ' (limit $' + esc(ev.barLimit) + ')' : ''));
+    add('Total', ev.total ? '$' + esc(ev.total) : '');
+    add('Deposit', ev.deposit ? '$' + esc(ev.deposit) + (ev.depositStatus ? ' — ' + ev.depositStatus : '') : '');
+    add('Status', ev.status);
+    const timelineHtml = ev.timeline && ev.timeline.length
+      ? '<div class="modal-section"><div class="modal-section-title">Timeline</div><table class="modal-timeline">' +
+        ev.timeline.map(t => '<tr><td>' + esc(t.time || '') + '</td><td>' + esc(t.text || t.event || '') + '</td></tr>').join('') + '</table></div>' : '';
+    const menuHtml = ev.menu ? '<div class="modal-section"><div class="modal-section-title">Menu</div><p style="font-size:0.9rem;white-space:pre-line;">' + esc(ev.menu) + '</p></div>' : '';
+    const notesHtml = (ev.notes || ev.clientNotes) ? '<div class="modal-section"><div class="modal-section-title">Notes</div><p style="font-size:0.9rem;white-space:pre-line;">' + esc([ev.notes, ev.clientNotes].filter(Boolean).join('\n')) + '</p></div>' : '';
+    content.innerHTML =
+      '<div class="modal-head"><h3>' + esc(ev.name) + '</h3><div class="sub">' + esc(typeLabel(type)) + '</div></div>' +
+      '<div class="modal-body">' + rows.join('') + timelineHtml + menuHtml + notesHtml +
+      '<div class="modal-actions"><button class="btn btn-navy" onclick="editBEO(' + ev.id + ')">Edit BEO</button>' +
+      '<button class="btn btn-outline" onclick="printBEODetail(' + ev.id + ')">Print</button>' +
+      '<button class="btn btn-outline" onclick="closeModal()">Close</button></div></div>';
+  } else {
+    ev = musicEvents.map(dbToLocal).find(e => String(e.id) === String(id));
+    if (!ev) return;
+    const type = detectType(ev);
+    const d = new Date(ev.date + 'T12:00:00');
+    content.innerHTML =
+      '<div class="modal-head"><h3>' + esc(ev.name) + '</h3><div class="sub">' + esc(typeLabel(type)) + '</div></div>' +
+      '<div class="modal-body">' +
+      '<div class="modal-row"><strong>Date</strong><span>' + esc(d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })) + '</span></div>' +
+      '<div class="modal-row"><strong>Time</strong><span>' + esc(ev.time || '6pm-9pm') + '</span></div>' +
+      (ev.cost ? '<div class="modal-row"><strong>Cost</strong><span>' + esc(ev.cost) + '</span></div>' : '') +
+      (ev.notes ? '<div class="modal-section" style="margin-top:1rem;"><div class="modal-section-title">Notes</div><p style="font-size:0.9rem;">' + esc(ev.notes) + '</p></div>' : '') +
+      '<div class="modal-actions"><button class="btn btn-navy" onclick="editMusic(' + ev.id + ')">Edit</button>' +
+      '<button class="btn btn-outline" onclick="closeModal()">Close</button></div></div>';
+  }
+  modal.classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+// ================= PIN GATE =================
+function checkPin() {
+  if (!CONFIG.ADMIN_PIN) {
+    document.getElementById('pin-error').textContent = 'No PIN is configured. Set CONFIG.ADMIN_PIN in this file first.';
+    document.getElementById('pin-error').style.display = 'block';
+    return;
+  }
+  const pin = document.getElementById('pin-input').value;
+  if (pin === CONFIG.ADMIN_PIN) {
+    document.getElementById('admin-gate').style.display = 'none';
+    document.getElementById('admin-area').style.display = 'block';
+    toast('Manager access unlocked');
+  } else {
+    document.getElementById('pin-error').textContent = 'Incorrect PIN. Try again.';
+    document.getElementById('pin-error').style.display = 'block';
+  }
+}
+function lockBEO() {
+  document.getElementById('admin-area').style.display = 'none';
+  document.getElementById('admin-gate').style.display = 'block';
+  document.getElementById('pin-input').value = '';
+  document.getElementById('pin-error').style.display = 'none';
+}
+
+// ================= MUSIC FORM / CRUD =================
+function showMusicForm() {
+  document.getElementById('music-form-title').textContent = 'New Music Event';
+  document.getElementById('music-edit-id').value = '';
+  document.getElementById('music-name').value = '';
+  document.getElementById('music-date').value = '';
+  document.getElementById('music-time').value = '6pm-9pm';
+  document.getElementById('music-cost').value = '';
+  document.getElementById('music-type').value = 'music';
+  document.getElementById('music-bmc').checked = false;
+  document.getElementById('music-notes').value = '';
+  document.getElementById('music-modal').classList.add('open');
+}
+function closeMusicModal() { document.getElementById('music-modal').classList.remove('open'); }
+function editMusic(id) {
+  const ev = musicEvents.map(dbToLocal).find(e => String(e.id) === String(id));
+  if (!ev) return;
+  closeModal();
+  document.getElementById('music-form-title').textContent = 'Edit Music Event';
+  document.getElementById('music-edit-id').value = ev.id;
+  document.getElementById('music-name').value = ev.name;
+  document.getElementById('music-date').value = ev.date;
+  document.getElementById('music-time').value = ev.time;
+  document.getElementById('music-cost').value = ev.cost;
+  document.getElementById('music-type').value = ev.type || 'music';
+  document.getElementById('music-bmc').checked = !!ev.bmc;
+  document.getElementById('music-notes').value = ev.notes;
+  document.getElementById('music-modal').classList.add('open');
+}
+async function saveMusic() {
+  const name = document.getElementById('music-name').value.trim();
+  const date = document.getElementById('music-date').value;
+  if (!name || !date) { toast('Name and date are required'); return; }
+  const ev = {
+    name, date,
+    time: document.getElementById('music-time').value.trim() || '6pm-9pm',
+    cost: document.getElementById('music-cost').value.trim(),
+    notes: document.getElementById('music-notes').value.trim(),
+    bmc: document.getElementById('music-bmc').checked,
+    type: document.getElementById('music-type').value
+  };
+  const editId = document.getElementById('music-edit-id').value;
+  try {
+    if (editId) {
+      await sb('music_events', 'PATCH', localToDb(ev), '?id=eq.' + editId);
+      toast('Music event updated');
+    } else {
+      await sb('music_events', 'POST', localToDb(ev));
+      toast('Music event added');
+    }
+    closeMusicModal();
+    await loadData();
+    sendEventNotification(ev, 'music');
+  } catch (err) {
+    console.error(err);
+    toast('Save failed: ' + err.message);
+  }
+}
+async function deleteMusic(id) {
+  if (!confirm('Delete this music event?')) return;
+  try {
+    await sb('music_events', 'DELETE', null, '?id=eq.' + id);
+    toast('Music event deleted');
+    await loadData();
+  } catch (err) { console.error(err); toast('Delete failed: ' + err.message); }
+}
+
+// ================= BEO FORM / CRUD =================
+function addTimelineRow(time, text) {
+  const tbody = document.getElementById('beo-timeline-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td><input type="time" class="tl-time" value="' + esc(time || '') + '"></td>' +
+    '<td><input type="text" class="tl-text" value="' + esc(text || '') + '" placeholder="e.g. Doors open"></td>' +
+    '<td><button type="button" class="btn btn-danger btn-sm" onclick="this.closest(\'tr\').remove()">×</button></td>';
+  tbody.appendChild(tr);
+}
+function collectBEOData() {
+  const g = id => document.getElementById(id).value;
+  const timeline = [...document.querySelectorAll('#beo-timeline-body tr')].map(tr => ({
+    time: tr.querySelector('.tl-time').value,
+    text: tr.querySelector('.tl-text').value
+  })).filter(t => t.time || t.text);
+  return {
+    id: g('beo-id') || undefined,
+    name: g('beo-name').trim(), date: g('beo-date'), type: g('beo-type'), status: g('beo-status'),
+    location: g('beo-location').trim(), arrival: g('beo-arrival'), start: g('beo-start'), end: g('beo-end'),
+    setup: g('beo-setup'), rain: g('beo-rain').trim(),
+    adults: g('beo-adults') ? +g('beo-adults') : null, children: g('beo-children') ? +g('beo-children') : null,
+    guaranteed: g('beo-guaranteed') ? +g('beo-guaranteed') : null, expected: g('beo-expected') ? +g('beo-expected') : null,
+    tableSetup: g('beo-table-setup').trim(), seating: g('beo-seating').trim(),
+    setupNotes: g('beo-setup-notes').trim(), dietary: g('beo-dietary').trim(),
+    package: g('beo-package').trim(), ppp: g('beo-ppp') ? +g('beo-ppp') : null,
+    bar: g('beo-bar').trim(), barLimit: g('beo-bar-limit') ? +g('beo-bar-limit') : null,
+    menu: g('beo-menu').trim(),
+    leadServer: g('beo-lead-server').trim(), bartender: g('beo-bartender').trim(),
+    servers: g('beo-servers').trim(), bussers: g('beo-bussers').trim(),
+    kitchenLead: g('beo-kitchen-lead').trim(), mod: g('beo-mod').trim(),
+    foodTotal: g('beo-food-total') ? +g('beo-food-total') : null,
+    bevTotal: g('beo-bev-total') ? +g('beo-bev-total') : null,
+    roomFee: g('beo-room-fee') ? +g('beo-room-fee') : null,
+    service: g('beo-service') ? +g('beo-service') : null,
+    tax: g('beo-tax') ? +g('beo-tax') : null,
+    total: g('beo-total') ? +g('beo-total') : null,
+    deposit: g('beo-deposit') ? +g('beo-deposit') : null,
+    depositStatus: g('beo-deposit-status'),
+    timeline,
+    contact: g('beo-contact').trim(), phone: g('beo-phone').trim(), email: g('beo-email').trim(),
+    notes: g('beo-notes').trim(), clientNotes: g('beo-client-notes').trim()
+  };
+}
+function showBEOForm() {
+  document.getElementById('beo-form-title').textContent = 'New Banquet Event Order';
+  document.getElementById('beo-id').value = '';
+  document.querySelectorAll('#beo-modal input, #beo-modal textarea').forEach(el => { if (el.type !== 'checkbox') el.value = ''; });
+  document.getElementById('beo-type').value = 'private';
+  document.getElementById('beo-status').value = 'confirmed';
+  document.getElementById('beo-timeline-body').innerHTML = '';
+  addTimelineRow();
+  document.getElementById('beo-modal').classList.add('open');
+}
+function closeBEOModal() { document.getElementById('beo-modal').classList.remove('open'); }
+function editBEO(id) {
+  const ev = beoEvents.map(beoToLocal).find(e => String(e.id) === String(id));
+  if (!ev) return;
+  closeModal();
+  document.getElementById('beo-form-title').textContent = 'Edit Banquet Event Order';
+  const s = (id2, v) => { document.getElementById(id2).value = v == null ? '' : v; };
+  s('beo-id', ev.id); s('beo-name', ev.name); s('beo-date', ev.date); s('beo-type', ev.type);
+  s('beo-status', ev.status); s('beo-location', ev.location); s('beo-arrival', ev.arrival);
+  s('beo-start', ev.start); s('beo-end', ev.end); s('beo-setup', ev.setup); s('beo-rain', ev.rain);
+  s('beo-adults', ev.adults); s('beo-children', ev.children); s('beo-guaranteed', ev.guaranteed);
+  s('beo-expected', ev.expected); s('beo-table-setup', ev.tableSetup); s('beo-seating', ev.seating);
+  s('beo-setup-notes', ev.setupNotes); s('beo-dietary', ev.dietary); s('beo-package', ev.package);
+  s('beo-ppp', ev.ppp); s('beo-bar', ev.bar); s('beo-bar-limit', ev.barLimit); s('beo-menu', ev.menu);
+  s('beo-lead-server', ev.leadServer); s('beo-bartender', ev.bartender); s('beo-servers', ev.servers);
+  s('beo-bussers', ev.bussers); s('beo-kitchen-lead', ev.kitchenLead); s('beo-mod', ev.mod);
+  s('beo-food-total', ev.foodTotal); s('beo-bev-total', ev.bevTotal); s('beo-room-fee', ev.roomFee);
+  s('beo-service', ev.service); s('beo-tax', ev.tax); s('beo-total', ev.total);
+  s('beo-deposit', ev.deposit); s('beo-deposit-status', ev.depositStatus);
+  s('beo-contact', ev.contact); s('beo-phone', ev.phone); s('beo-email', ev.email);
+  s('beo-notes', ev.notes); s('beo-client-notes', ev.clientNotes);
+  const tbody = document.getElementById('beo-timeline-body');
+  tbody.innerHTML = '';
+  (ev.timeline && ev.timeline.length ? ev.timeline : [{}]).forEach(t => addTimelineRow(t.time, t.text || t.event));
+  document.getElementById('beo-modal').classList.add('open');
+}
+async function saveBEO() {
+  const beo = collectBEOData();
+  if (!beo.name || !beo.date) { toast('Event name and date are required'); return; }
+  try {
+    if (beo.id) {
+      await sb('beos', 'PATCH', localToBeoDb(beo), '?id=eq.' + beo.id);
+      toast('BEO updated');
+    } else {
+      await sb('beos', 'POST', localToBeoDb(beo));
+      toast('BEO saved to schedule');
+    }
+    closeBEOModal();
+    await loadData();
+    sendEventNotification(beo, 'beo');
+  } catch (err) {
+    console.error(err);
+    toast('Save failed: ' + err.message);
+  }
+}
+function saveBEODraft() {
+  const beo = collectBEOData();
+  localStorage.setItem('bob-events-2-beo-draft', JSON.stringify(beo));
+  toast('Draft saved on this device');
+}
+function loadBEODraft() {
+  try {
+    const raw = localStorage.getItem('bob-events-2-beo-draft');
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (!d || !d.name) return;
+    if (confirm('A saved BEO draft ("' + d.name + '") was found on this device. Load it?')) {
+      showBEOForm();
+      const s = (id2, v) => { document.getElementById(id2).value = v == null ? '' : v; };
+      Object.keys(d).forEach(k => { const el = document.getElementById('beo-' + k.replace(/[A-Z]/g, m => '-' + m.toLowerCase())); if (el) el.value = d[k] == null ? '' : d[k]; });
+      const tbody = document.getElementById('beo-timeline-body');
+      tbody.innerHTML = '';
+      (d.timeline && d.timeline.length ? d.timeline : [{}]).forEach(t => addTimelineRow(t.time, t.text));
+    }
+  } catch (e) { console.error('draft load failed', e); }
+}
+async function deleteBEO(id) {
+  if (!confirm('Delete this BEO?')) return;
+  try {
+    await sb('beos', 'DELETE', null, '?id=eq.' + id);
+    toast('BEO deleted');
+    await loadData();
+  } catch (err) { console.error(err); toast('Delete failed: ' + err.message); }
+}
+function printBEO() { window.print(); }
+function printBEODetail(id) {
+  const ev = beoEvents.map(beoToLocal).find(e => String(e.id) === String(id));
+  if (!ev) return;
+  showEventDetail(id, 'beo');
+  setTimeout(() => window.print(), 300);
+}
+
+// ================= CONTACTS =================
+async function addContact() {
+  const name = document.getElementById('new-contact-name').value.trim();
+  const email = document.getElementById('new-contact-email').value.trim();
+  if (!name || !email) { toast('Name and email are required'); return; }
+  try {
+    await sb('staff_contacts', 'POST', { name, email });
+    document.getElementById('new-contact-name').value = '';
+    document.getElementById('new-contact-email').value = '';
+    toast('Contact added');
+    await loadData();
+  } catch (err) { console.error(err); toast('Add failed: ' + err.message); }
+}
+async function removeContact(id) {
+  if (!confirm('Remove this contact?')) return;
+  try {
+    await sb('staff_contacts', 'DELETE', null, '?id=eq.' + id);
+    toast('Contact removed');
+    await loadData();
+  } catch (err) { console.error(err); toast('Remove failed: ' + err.message); }
+}
+
+// ================= NOTIFICATIONS =================
+function getCheckedRecipients() {
+  return [...document.querySelectorAll('.notify-check:checked')].map(c => c.value);
+}
+async function sendEventNotification(ev, kind) {
+  const recipients = getCheckedRecipients();
+  if (!recipients.length) return;
+  const d = new Date(ev.date + 'T12:00:00');
+  const subject = (kind === 'beo' ? 'BEO: ' : 'Music: ') + ev.name + ' — ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const body = 'New/updated event at Buffalo Olde Brewery:\n\n' + ev.name + '\n' +
+    d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) +
+    (ev.start ? '\n' + fmtTime(ev.start) : '') + (ev.time ? '\n' + ev.time : '') +
+    (ev.contact ? '\nContact: ' + ev.contact : '') + '\n\nSee BOB Events 2 for details.';
+  if (CONFIG.EMAILJS_SERVICE_ID && CONFIG.EMAILJS_PUBLIC_KEY) {
+    try {
+      emailjs.init(CONFIG.EMAILJS_PUBLIC_KEY);
+      for (const to of recipients) {
+        await emailjs.send(CONFIG.EMAILJS_SERVICE_ID, CONFIG.EMAILJS_TEMPLATE_ID, { to_email: to, subject, message: body });
+      }
+      toast('Notification emails sent');
+    } catch (err) {
+      console.error(err);
+      toast('EmailJS failed — opening your mail app instead');
+      window.location.href = 'mailto:' + recipients.join(',') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    }
+  } else {
+    // No EmailJS configured: fall back to the user's mail app. Note: this puts all
+    // staff in the To line, so they see each other's addresses. Prefer EmailJS (or
+    // BCC) once keys are configured.
+    window.location.href = 'mailto:' + recipients.join(',') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  }
+}
+
+// ================= EXPORT =================
+function exportJSON() {
+  const data = { exported_at: new Date().toISOString(), music_events: musicEvents, beos: beoEvents, staff_contacts: contacts };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bob-events-2-export-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ================= NAV / INIT =================
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+    link.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById(link.dataset.section).classList.add('active');
+  });
+});
+document.querySelectorAll('.pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentFilter = pill.dataset.filter;
+    renderEventsList();
+  });
+});
+document.getElementById('pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') checkPin(); });
+document.querySelectorAll('.modal-overlay').forEach(ov => {
+  ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay').forEach(ov => ov.classList.remove('open'));
+});
+
+loadData();
+loadBEODraft(); // offer back a saved BEO draft if one exists on this device
+</script>
+</body>
+</html>
