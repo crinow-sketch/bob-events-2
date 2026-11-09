@@ -4,8 +4,8 @@
   "description": "Buffalo Olde Brewery - Events & Calendar (v2)",
   "start_url": "/bob-events-2/",
   "display": "standalone",
-  "background_color": "#1B2A4A",
-  "theme_color": "#1B2A4A",
+  "background_color": "#211D18",
+  "theme_color": "#211D18",
   "icons": [
     {
       "src": "icon.svg",

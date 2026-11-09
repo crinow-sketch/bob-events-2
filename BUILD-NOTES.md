@@ -57,3 +57,60 @@ v1 repo contents were: `index.html` (61,027 bytes, 1,151 lines), `app-manifest.j
 - **Live behavior against Supabase** (loading real events, saving a BEO, PIN unlock flow in a browser) — no live browser test was run in this subagent session; the checks above are static/syntax only. A quick open of the file in a browser pointed at the live tables would confirm end-to-end function. The parent agent can arrange that.
 - **GitHub Pages deployment** — nothing was pushed (no auth here, and the task forbids it). The deploy steps in `README.md` are the standard Pages flow from the v1 repo's own setup; the `start_url` and manifest assume the repo is named `bob-events-2` under `crinow-sketch`.
 - **Whether the v1 repo has changed since the tarball fetch** — fetched 2026-11-08 from `master`; if v1 gets new commits, this snapshot comparison goes stale (does not affect v2's function).
+
+## 2026-11-09 visual redesign (Crowbar — own vision, not Claude's)
+
+Presentation-only restyle of `index.html`. No JS, data flow, Supabase call,
+PIN, or feature behavior changed — both `<script>` blocks are byte-identical
+to the 2026-11-08 file (verified by diff), and the two v2 fixes are intact
+(`CONFIG.EMAILJS_SERVICE_ID` defined; `loadBEODraft()` called on init).
+
+**Design:** warm brewery identity — charcoal `#211D18` + amber `#E8A317` /
+gold `#D49A1F` + cream `#F7F1E5`. Type: Oswald (taproom-sign caps for
+headings, nav, numbers), Inter (body), Fraunces italic (hero kicker).
+Replaces the old look entirely (Playfair Display / Source Sans 3,
+terracotta `#C2654A` / navy `#1B2A4A` / sage are gone from the file).
+
+**What changed, file by file:**
+- `index.html` — whole `<style>` block rewritten; the double header
+  (dark site-bar + white nav) replaced by one sticky charcoal masthead
+  carrying the real faceted-buffalo logo (`bob-logo-white.png`, white
+  artwork generated from the black original by inverting RGB with alpha
+  preserved); hero gains a Fraunces italic kicker ("Buffalo Olde Brewery ·
+  1223 Lovejoy St"); stats become a charcoal band with amber numbers;
+  event cards are ticket-style (paper card, gold spine, dashed
+  perforation between date block and details); the month calendar is
+  card-based (gapped cream day cards, amber ring on today, tinted type
+  chips with a colored left edge — Sabres/Bills/Trivia keep solid team
+  colors); BEO status chips are explicit (Confirmed = green,
+  Tentative = amber, Draft = gray); modal and BEO-form headers are
+  charcoal with a gold rule; buttons are amber-primary / charcoal /
+  outline; PIN gate shows the black logo (`bob-logo.png`); a charcoal
+  footer with the logo and the Lovejoy address was added. Old CSS variable
+  names are kept as aliases with new values, so every inline style and
+  JS-generated string still renders. Mobile: masthead stacks, nav becomes
+  a horizontal scroll row, calendar cells shrink.
+- `bob-logo.png` (new) — the real black faceted-buffalo logo, copied from
+  `~/workspace/documents/Buffalo Olde Brewery Logo.png`.
+- `bob-logo-white.png` (new) — same logo with artwork inverted to white
+  for the charcoal masthead/footer. Note: the source file
+  "Buffalo Olde Brewery Logo - white.png" is actually black artwork on a
+  solid white box (fully opaque), so it was NOT used; the white version
+  was generated from the transparent black original instead.
+- `icon.svg`, `icon-192.png`, `icon-512.png` — redrawn in the new palette
+  (charcoal tile, gold frame, amber BOB, cream subline). The old navy /
+  terracotta beer-mug icon is gone.
+- `app-manifest.json` — `theme_color` / `background_color` `#1B2A4A` →
+  `#211D18`.
+- The `inventory.html` nav link is kept (still a dead link in this repo,
+  as before — behavior unchanged).
+
+**Verified 2026-11-09 (this session):** `node --check` passed on both
+inline `<script>` blocks; `html.parser` feed clean (no errors, no
+unclosed tags); all 37 ids referenced by JS exist; every `var(--…)` used
+is defined; CSS braces balanced (206 rules); no Playfair / Source Sans /
+old navy-terracotta hex left; all locally referenced assets exist and
+serve HTTP 200 from a local `python3 -m http.server` (index, both logos,
+manifest, svg + both png icons). Not verified: a live browser render or
+screenshot (no headless browser on this machine) and no live Supabase
+calls were made — the parent should open the page once before pushing.
